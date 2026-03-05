@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">PasitosApp</string>
+
+    <string name="google_maps_key">AIzaSyCysrq6F7B6gKb4fEnIs7J5ALVZRJYQBD8</string>
+
+    <string name="toast_guardado">Posición y batería guardadas</string>
+    <string name="posicionBuscando">Posición: Buscando</string>
+    <string name="bateria">Batería: --%</string>
+</resources>
