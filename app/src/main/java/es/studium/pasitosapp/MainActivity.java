@@ -16,12 +16,11 @@ import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
-import android.location.Location;
-import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.BatteryManager;
 import android.os.Bundle;
-import android.os.Handler;
+import java.util.Timer;
+import java.util.TimerTask;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,12 +37,14 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private GoogleMap mMap;
     private DatabaseHelper dbHelper;
-    private Handler handler = new Handler();
+    private Timer timer;
+
+    // Variables iguales a las de tu compañera
+    private LocationManager mlocManager;
+    private Localizacion local;
 
     private double ultimaLat = 0.0;
     private double ultimaLng = 0.0;
-
-    // Referencias a la UI
     private TextView tvPosicion, tvBateria;
 
     @Override
@@ -51,10 +52,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Inicializar vistas
         tvPosicion = findViewById(R.id.tvPosicion);
         tvBateria = findViewById(R.id.tvBateria);
-
         dbHelper = new DatabaseHelper(this);
 
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
@@ -63,42 +62,54 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mapFragment.getMapAsync(this);
         }
 
-        configurarGPS();
+        // Llamamos al nuevo método de configuración
+        locationStart();
         iniciarBucleGuardado();
     }
 
-    private void configurarGPS() {
-        LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+    private void locationStart() {
+        mlocManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        local = new Localizacion();
+        local.setMainActivity(this); // Conectamos las dos clases
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+
+            // Registramos ambos proveedores (GPS y Red)
+            mlocManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 300000, 0, local);
+            mlocManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 30000, 0, local);
+        } else {
+            // Pedimos permisos si no los hay
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 100);
-            return;
         }
+    }
 
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000, 5, new LocationListener() {
-            @Override
-            public void onLocationChanged(@NonNull Location location) {
-                ultimaLat = location.getLatitude();
-                ultimaLng = location.getLongitude();
+    // Este método lo llamará la clase Localizacion cada vez que cambie la posición
+    public void actualizarPosicionUI(double lat, double lng) {
+        ultimaLat = lat;
+        ultimaLng = lng;
 
-                // Actualizar panel de posición
-                tvPosicion.setText(String.format("Lat: %.5f\nLng: %.5f", ultimaLat, ultimaLng));
-
-                if (mMap != null) {
-                    mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(ultimaLat, ultimaLng), 15));
-                }
-            }
-        });
+        // Actualizamos los textos y el mapa
+        tvPosicion.setText(String.format("Lat: %.5f\nLng: %.5f", ultimaLat, ultimaLng));
+        if (mMap != null) {
+            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(ultimaLat, ultimaLng), 15));
+        }
     }
 
     private void iniciarBucleGuardado() {
-        handler.postDelayed(new Runnable() {
+        timer = new Timer();
+        timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
-                guardarEnBaseDeDatos();
-                handler.postDelayed(this, 300000);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        guardarEnBaseDeDatos();
+                    }
+                });
             }
-        }, 0);
+        }, 0, 300000);
     }
 
     private void guardarEnBaseDeDatos() {
@@ -106,7 +117,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Intent batteryStatus = registerReceiver(null, ifilter);
         int level = (batteryStatus != null) ? batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) : 0;
 
-        // Actualizar panel de batería
         tvBateria.setText("Batería: " + level + "%");
 
         if (ultimaLat != 0.0) {
@@ -115,11 +125,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             values.put("lat", ultimaLat);
             values.put("lng", ultimaLng);
             values.put("bat", level);
-
             db.insert("posiciones", null, values);
             db.close();
-
-            Toast.makeText(this, "Posición guardada automáticamente", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Posición guardada", Toast.LENGTH_SHORT).show();
             actualizarMarcadores();
         }
     }
@@ -128,52 +136,45 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     public void onMapReady(@NonNull GoogleMap googleMap) {
         mMap = googleMap;
         mMap.getUiSettings().setZoomControlsEnabled(true);
-
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             mMap.setMyLocationEnabled(true);
-        } else {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 100);
         }
-
         actualizarMarcadores();
     }
 
     private void actualizarMarcadores() {
         if (mMap == null) return;
         mMap.clear();
-
         SQLiteDatabase db = dbHelper.getReadableDatabase();
         Cursor cursor = db.rawQuery("SELECT * FROM posiciones", null);
-
         BitmapDescriptor icon = descriptorFromVector(this, R.drawable.marcador);
-
         if (cursor.moveToFirst()) {
             do {
                 double lat = cursor.getDouble(cursor.getColumnIndexOrThrow("lat"));
                 double lng = cursor.getDouble(cursor.getColumnIndexOrThrow("lng"));
                 int bat = cursor.getInt(cursor.getColumnIndexOrThrow("bat"));
-
-                mMap.addMarker(new MarkerOptions()
-                        .position(new LatLng(lat, lng))
-                        .title("Batería: " + bat + "%")
-                        .icon(icon));
+                mMap.addMarker(new MarkerOptions().position(new LatLng(lat, lng))
+                        .title("Batería: " + bat + "%").icon(icon));
             } while (cursor.moveToNext());
         }
         cursor.close();
     }
 
-
     private BitmapDescriptor descriptorFromVector(Context context, int vectorResId) {
         Drawable vectorDrawable = ContextCompat.getDrawable(context, vectorResId);
         if (vectorDrawable == null) return BitmapDescriptorFactory.defaultMarker();
-
         vectorDrawable.setBounds(0, 0, vectorDrawable.getIntrinsicWidth(), vectorDrawable.getIntrinsicHeight());
         Bitmap bitmap = Bitmap.createBitmap(vectorDrawable.getIntrinsicWidth(),
                 vectorDrawable.getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
         vectorDrawable.draw(canvas);
         return BitmapDescriptorFactory.fromBitmap(bitmap);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (timer != null) timer.cancel();
     }
 }
